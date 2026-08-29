@@ -1,0 +1,45 @@
+[package]
+name = "rust_shopping_app"
+version = "0.1.0"
+edition = "2024"
+
+#[[bin]]
+#name = "rust_shopping_app"
+#path = "src/lib.rs"
+#
+#[lib]
+#name = "rust_shopping_app"
+#path = "src/lib.rs"
+#crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0"
+winit = { version = "0.30.13", features = ["android-native-activity"] }
+env_logger = "0.10"
+log = "0.4.34"
+wgpu = "30.0.1"
+pollster = "1.0.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15.1"
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+winit = { version = "0.30.13", features = ["android-native-activity"] }
+
+[package.metadata.android]
+package = "dev.lempek.rustshopping"
+apk_label = "ShoppingList"
+target_sdk_version = 36
+min_sdk_version = 34
+build_targets = ["x86_64-linux-android"]
+
+[[package.metadata.android.application.activity]]
+name = "android.app.NativeActivity"
+config_changes = "orientation|keyboardHidden|screenSize"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.lib_name"
+value = "rust_shopping_app"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
