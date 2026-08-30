@@ -1647,6 +1647,7 @@ dependencies = [
  "android-activity",
  "android_logger",
  "anyhow",
+ "bytemuck",
  "console_error_panic_hook",
  "console_log",
  "env_logger",
