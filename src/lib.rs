@@ -2,7 +2,7 @@ mod model;
 mod resources;
 mod texture;
 
-use crate::model::{DrawModel, Model, ModelVertex, Vertex};
+use crate::model::{DrawModel, Material, Model, ModelVertex, Vertex};
 use cgmath::prelude::*;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -243,8 +243,6 @@ pub struct State {
     is_surface_configured: bool,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    diffuse_bind_group: wgpu::BindGroup,
-    diffuse_texture: texture::Texture,
     camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
@@ -258,6 +256,7 @@ pub struct State {
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     light_render_pipeline: wgpu::RenderPipeline,
+    debug_material: Material,
 }
 
 impl State {
@@ -326,10 +325,6 @@ impl State {
             view_formats: vec![],
         };
 
-        let diffuse_bytes = include_bytes!("../res/happy-tree.png");
-        let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png")?;
-
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("texture_bind_group_layout"),
@@ -350,23 +345,24 @@ impl State {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
-
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("diffuse_bind_group"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-            ],
-        });
 
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
@@ -536,6 +532,15 @@ impl State {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
+        let debug_material = {
+            let diffuse_bytes = include_bytes!("../res/cobble-diffuse.png");
+            let normal_bytes = include_bytes!("../res/cobble-normal.png");
+
+            let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "res/alt-diffuse.png", false).unwrap();
+            let normal_texture = texture::Texture::from_bytes(&device, &queue, normal_bytes, "res/alt-normal.png", true).unwrap();
+
+            model::Material::new(&device, "alt-material", diffuse_texture, normal_texture, &texture_bind_group_layout)
+        };
         Ok(Self {
             surface,
             device,
@@ -544,8 +549,6 @@ impl State {
             is_surface_configured: false,
             window,
             render_pipeline,
-            diffuse_bind_group,
-            diffuse_texture,
             camera,
             camera_uniform,
             camera_buffer,
@@ -559,6 +562,8 @@ impl State {
             light_buffer,
             light_bind_group,
             light_render_pipeline,
+            #[allow(dead_code)]
+            debug_material,
         })
     }
 
@@ -691,8 +696,6 @@ impl State {
                 multiview_mask: None,
             });
 
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             use crate::model::DrawLight;
             render_pass.set_pipeline(&self.light_render_pipeline);
@@ -703,8 +706,9 @@ impl State {
             );
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw_model_instanced(
+            render_pass.draw_model_instanced_with_material(
                 &self.obj_model,
+                &self.debug_material,
                 0..self.instances.len() as u32,
                 &self.camera_bind_group,
                 &self.light_bind_group,
