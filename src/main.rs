@@ -1,6 +1,6 @@
-use rust_shopping_app::run;
+use rust_learn_wgpu::app::App;
 
 fn main() {
     #[cfg(not(target_os = "android"))]
-    run().unwrap();
+    App::run().unwrap();
 }

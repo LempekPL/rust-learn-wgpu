@@ -1,5 +1,5 @@
 [package]
-name = "rust_shopping_app"
+name = "rust_learn_wgpu"
 version = "0.1.0"
 edition = "2024"
 
@@ -25,9 +25,11 @@ log = "0.4.34"
 wgpu = "30.0.1"
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+glam = { version = "0.33.6", features = ["bytemuck"] }
 cgmath = "0.18.0"
-tobj = { version = "4.0.5", default-features = false, features = ["async"]}
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+tobj = { version = "4.0.5", default-features = false, features = ["async"] }
+web-time = "1.1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.6"
@@ -48,8 +50,8 @@ android_logger = "0.15.1"
 winit = { version = "0.30.13", features = ["android-native-activity"] }
 
 [package.metadata.android]
-package = "dev.lempek.rustshopping"
-apk_label = "RustShoppingList"
+package = "dev.lempek.rustlearn"
+apk_label = "RustLearnWgpu"
 target_sdk_version = 36
 min_sdk_version = 34
 build_targets = ["x86_64-linux-android"]
@@ -60,7 +62,7 @@ config_changes = "orientation|keyboardHidden|screenSize"
 
 [[package.metadata.android.application.activity.meta_data]]
 name = "android.app.lib_name"
-value = "rust_shopping_app"
+value = "rust_learn_wgpu"
 
 [[package.metadata.android.application.activity.intent_filter]]
 actions = ["android.intent.action.MAIN"]

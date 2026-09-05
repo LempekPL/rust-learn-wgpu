@@ -21,10 +21,11 @@
 <body id="wasm-example">
 <canvas id="canvas"></canvas>
 <script type="module">
-    import init from "./pkg/rust_shopping_app.js";
+    import init from "./pkg/rust_learn_wgpu.js";
     init().then(() => {
         console.log("WASM Loaded");
-    });
+    },
+        (e) => console.log(e));
 </script>
 </body>
 </html>
