@@ -1,4 +1,8 @@
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use winit::platform::web::EventLoopExtWebSys;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -6,11 +10,13 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 struct State {
-    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    window: Arc<Window>,
+    window: Option<Arc<Window>>,
+    size: winit::dpi::PhysicalSize<u32>,
     last_render_time: web_time::Instant,
 }
 
@@ -79,8 +85,8 @@ impl State {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            width: size.width,
-            height: size.height,
+            width: size.width.max(1),
+            height: size.height.max(1),
             present_mode: surface_present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
@@ -90,24 +96,20 @@ impl State {
         surface.configure(&device, &config);
 
         Ok(Self {
-            surface,
+            instance,
+            surface: Some(surface),
             device,
             queue,
             config,
-            window,
+            window: Some(window),
+            size: winit::dpi::PhysicalSize::new(size.width.max(1), size.height.max(1)),
             last_render_time: web_time::Instant::now(),
         })
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            #[allow(unused_variables)]
-            let max = u32::MAX;
-            #[cfg(target_arch = "wasm32")]
-            let max = 2048; // Browser texture limit safety
-            self.config.width = new_size.width.min(max);
-            self.config.height = new_size.height.min(max);
-            self.surface.configure(&self.device, &self.config);
+            self.size = new_size;
         }
     }
 
@@ -116,12 +118,26 @@ impl State {
     }
 
     fn render(&mut self) -> anyhow::Result<()> {
+        let (surface, window) = match (&self.surface, &self.window) {
+            (Some(s), Some(w)) => (s, w),
+            _ => return Ok(()),
+        };
+        // reduces flickering on web
+        let max_size = if cfg!(target_arch = "wasm32") { 2048 } else { u32::MAX };
+        let target_width = self.size.width.min(max_size);
+        let target_height = self.size.height.min(max_size);
+        if self.config.width != target_width || self.config.height != target_height {
+            self.config.width = target_width;
+            self.config.height = target_height;
+            surface.configure(&self.device, &self.config);
+        }
+
         use wgpu::CurrentSurfaceTexture as CST;
-        let output = match self.surface.get_current_texture() {
+        let output = match surface.get_current_texture() {
             CST::Success(surface_texture) | CST::Suboptimal(surface_texture) => surface_texture,
             CST::Timeout | CST::Occluded | CST::Validation => return Ok(()),
             CST::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 return Ok(());
             }
             CST::Lost => {
@@ -159,25 +175,23 @@ impl State {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-
         }
 
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(output);
-
-        self.window.request_redraw();
+        window.request_redraw();
         Ok(())
     }
 }
 
 pub struct App {
     #[cfg(target_arch = "wasm32")]
-    proxy: Option<winit::event_loop::EventLoopProxy<crate::State>>,
+    proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     state: Option<State>,
 }
 
 impl App {
-    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<crate::State>) -> Self {
+    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
         Self {
@@ -190,7 +204,7 @@ impl App {
     pub fn run(
         #[cfg(target_os = "android")] app: winit::platform::android::activity::AndroidApp,
     ) -> anyhow::Result<()> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
         {
             env_logger::init();
         }
@@ -233,10 +247,6 @@ impl App {
 
 impl ApplicationHandler<State> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
-            return;
-        }
-
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes().with_title("RustLearnWgpu");
 
@@ -255,6 +265,15 @@ impl ApplicationHandler<State> for App {
         }
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+
+        if let Some(state) = &mut self.state {
+            let surface = state.instance.create_surface(window.clone()).unwrap();
+            surface.configure(&state.device, &state.config);
+
+            state.surface = Some(surface);
+            state.window = Some(window);
+            return;
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -282,7 +301,7 @@ impl ApplicationHandler<State> for App {
     }
 
     #[allow(unused_mut)]
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, mut event: State) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
         #[cfg(target_arch = "wasm32")]
         {
             event.window.request_redraw();
@@ -294,7 +313,7 @@ impl ApplicationHandler<State> for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        window_id: WindowId,
+        _window_id: WindowId,
         event: WindowEvent,
     ) {
         let state = match &mut self.state {
@@ -333,6 +352,13 @@ impl ApplicationHandler<State> for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(state) = &mut self.state {
+            state.surface = None;
+            state.window = None;
         }
     }
 }
