@@ -1,7 +1,7 @@
 use crate::input::{Keyboard, Mouse};
 use crate::vertex;
-use crate::vertex::ShapeBatcher;
-use std::sync::Arc;
+use crate::vertex::{Shape, ShapeBatcher, ShapeType};
+use std::sync::{Arc, LazyLock};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use winit::application::ApplicationHandler;
@@ -83,6 +83,9 @@ impl Time {
         self.time_start.elapsed()
     }
 }
+
+static TEST: LazyLock<std::sync::Mutex<(u8, glam::Vec2, glam::Vec2)>> =
+    LazyLock::new(|| std::sync::Mutex::new((0, glam::Vec2::ZERO, glam::Vec2::ZERO)));
 
 impl State {
     async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
@@ -196,12 +199,10 @@ impl State {
             bind_group: globals_bind_group,
         };
 
-        let mut quads =
+        let mut shapes =
             ShapeBatcher::new(&device, config.format, &[Some(&globals_bind_group_layout)]);
 
-        quads.draw_rectangle(100., 100., 50., 50., wgpu::Color::WHITE.into());
-
-        Ok(Self {
+        let mut state = Self {
             instance,
             surface: Some(surface),
             device,
@@ -216,8 +217,10 @@ impl State {
             keyboard: Keyboard::new(),
             mouse: Mouse::new(),
 
-            shapes: quads,
-        })
+            shapes,
+        };
+        state.init();
+        Ok(state)
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -236,24 +239,51 @@ impl State {
         self.mouse.update();
     }
 
+    fn init(&mut self) {
+        self.shapes.draw(Shape::Rectangle {
+            pos: glam::Vec2::splat(100.),
+            width: 50.,
+            height: 50.,
+            color: wgpu::Color::WHITE.into(),
+        });
+    }
+
     fn update(&mut self) {
         // log::info!("FPS: {:?}", 1.0 / self.time.delta());
         if self.keyboard.just_pressed(KeyCode::Escape) {
             self.should_close = true;
         }
         if self.keyboard.just_pressed(KeyCode::Space) {
-            self.shapes.clear();
+            self.shapes.clear_shape(ShapeType::Circle);
         }
         if self.mouse.is_pressed(MouseButton::Left) {
             let (m_x, m_y) = self.mouse.position();
-            let size = 10.;
-            self.shapes.draw_rectangle(
-                m_x as f32 - size / 2.,
-                m_y as f32 - size / 2.,
-                size,
-                size,
-                wgpu::Color::GREEN.into(),
-            );
+            self.shapes.draw(Shape::Circle {
+                pos: glam::Vec2::new(m_x as f32, m_y as f32),
+                radius: 5.,
+                color: wgpu::Color::GREEN.into(),
+            });
+        }
+        if self.mouse.just_pressed(MouseButton::Right) {
+            let (m_x, m_y) = self.mouse.position();
+            let mut data = TEST.lock().unwrap();
+            if data.0 == 0 {
+                *data = (
+                    data.0 + 1,
+                    glam::Vec2::new(m_x as f32, m_y as f32),
+                    glam::Vec2::ZERO,
+                );
+            } else if data.0 == 1 {
+                *data = (data.0 + 1, data.1, glam::Vec2::new(m_x as f32, m_y as f32));
+            } else {
+                self.shapes.draw(Shape::Triangle {
+                    pos1: data.1,
+                    pos2: data.2,
+                    pos3: glam::Vec2::new(m_x as f32, m_y as f32),
+                    color: wgpu::Color::BLUE.into(),
+                });
+                *data = (0, glam::Vec2::ZERO, glam::Vec2::ZERO);
+            }
         }
     }
 

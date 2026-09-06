@@ -93,12 +93,63 @@ impl From<([f32; 2], [f32; 2], Color)> for PointVertex {
     }
 }
 
+pub enum Shape {
+    Rectangle {
+        pos: glam::Vec2,
+        width: f32,
+        height: f32,
+        color: Color,
+    },
+    Circle {
+        pos: glam::Vec2,
+        radius: f32,
+        color: Color,
+    },
+    Triangle {
+        pos1: glam::Vec2,
+        pos2: glam::Vec2,
+        pos3: glam::Vec2,
+        color: Color,
+    },
+}
+
+impl Shape {
+    fn kind(&self) -> ShapeType {
+        match self {
+            Shape::Rectangle { .. } => ShapeType::Rectangle,
+            Shape::Circle { .. } => ShapeType::Circle,
+            Shape::Triangle { .. } => ShapeType::Triangle,
+        }
+    }
+}
+
+#[repr(usize)]
+pub enum ShapeType {
+    Rectangle = 0,
+    Circle,
+    Triangle,
+}
+
+impl ShapeType {
+    const COUNT: usize = 3;
+    const ALL: [ShapeType; Self::COUNT] =
+        [ShapeType::Rectangle, ShapeType::Circle, ShapeType::Triangle];
+
+    fn shader(&self) -> wgpu::ShaderModuleDescriptor<'_> {
+        match self {
+            ShapeType::Rectangle => wgpu::include_wgsl!("shaders/quad.wgsl"),
+            ShapeType::Circle => wgpu::include_wgsl!("shaders/circle.wgsl"),
+            ShapeType::Triangle => wgpu::include_wgsl!("shaders/triangle.wgsl"),
+        }
+    }
+}
+
 pub trait Rendering {
     fn update_buffers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue);
     fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>);
 }
 
-pub struct ShapeBatcher {
+struct ShapeData {
     vertices: Vec<PointVertex>,
     indices: Vec<u32>,
     vertex_buffer: wgpu::Buffer,
@@ -108,115 +159,7 @@ pub struct ShapeBatcher {
     render_pipeline: wgpu::RenderPipeline,
 }
 
-impl ShapeBatcher {
-    const INITIAL_VERTEX_CAPACITY: usize = 1024;
-    const INITIAL_INDEX_CAPACITY: usize = (Self::INITIAL_VERTEX_CAPACITY as f32 * 1.5) as usize;
-
-    pub fn new<'a>(device: &wgpu::Device, format: wgpu::TextureFormat, bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>]) -> Self {
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shape Vertex Buffer"),
-            size: (Self::INITIAL_VERTEX_CAPACITY * size_of::<PointVertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shape Index Buffer"),
-            size: (Self::INITIAL_INDEX_CAPACITY * size_of::<u32>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/quad.wgsl"));
-
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Shape Pipeline Layout"),
-                bind_group_layouts,
-                immediate_size: 0,
-            });
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Shape Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: None,
-                buffers: &[Some(PointVertex::LAYOUT)],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: None,
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            cache: None,
-            multiview_mask: None,
-        });
-
-        Self {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            vertex_buffer,
-            vertex_capacity: Self::INITIAL_VERTEX_CAPACITY,
-            index_buffer,
-            index_capacity: Self::INITIAL_INDEX_CAPACITY,
-            render_pipeline,
-        }
-    }
-
-    pub fn draw_rectangle(&mut self, x: f32, y: f32, width: f32, height: f32, color: Color) {
-        let left = x;
-        let right = x + width;
-        let top = y;
-        let bottom = y + height;
-
-        let start_index = self.vertices.len() as u32;
-
-        self.vertices.extend_from_slice(&[
-            PointVertex::from(([left, top], [0.,0.], color)),
-            PointVertex::from(([left, bottom], [0.,1.], color)),
-            PointVertex::from(([right, bottom], [1.,1.], color)),
-            PointVertex::from(([right, top], [1.,0.], color)),
-        ]);
-
-        self.indices.extend_from_slice(&[
-            start_index,
-            start_index + 1,
-            start_index + 2,
-            start_index,
-            start_index + 2,
-            start_index + 3,
-        ]);
-    }
-
-    pub fn clear(&mut self) {
-        self.vertices.clear();
-        self.indices.clear();
-    }
-}
-
-impl Rendering for ShapeBatcher {
+impl Rendering for ShapeData {
     fn update_buffers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if self.indices.is_empty() {
             return;
@@ -257,5 +200,206 @@ impl Rendering for ShapeBatcher {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+    }
+}
+
+impl ShapeData {
+    const INITIAL_VERTEX_CAPACITY: usize = 1024;
+    const INITIAL_INDEX_CAPACITY: usize = (Self::INITIAL_VERTEX_CAPACITY as f32 * 1.5) as usize;
+
+    pub fn new<'a>(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>],
+        shader_desc: wgpu::ShaderModuleDescriptor,
+    ) -> Self {
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shape Vertex Buffer"),
+            size: (Self::INITIAL_VERTEX_CAPACITY * size_of::<PointVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shape Index Buffer"),
+            size: (Self::INITIAL_INDEX_CAPACITY * size_of::<u32>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let shader = device.create_shader_module(shader_desc);
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shape Pipeline Layout"),
+                bind_group_layouts,
+                immediate_size: 0,
+            });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Shape Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: None,
+                buffers: &[Some(PointVertex::LAYOUT)],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: None,
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            cache: None,
+            multiview_mask: None,
+        });
+
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            vertex_buffer,
+            vertex_capacity: Self::INITIAL_VERTEX_CAPACITY,
+            index_buffer,
+            index_capacity: Self::INITIAL_INDEX_CAPACITY,
+            render_pipeline,
+        }
+    }
+}
+
+pub struct ShapeBatcher {
+    shapes: [ShapeData; ShapeType::COUNT],
+}
+
+impl ShapeBatcher {
+    pub fn new<'a>(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>],
+    ) -> Self {
+        Self {
+            shapes: ShapeType::ALL
+                .map(|s| ShapeData::new(device, format, bind_group_layouts, s.shader())),
+        }
+    }
+
+    pub fn draw(&mut self, shape: Shape) {
+        let shape_data = &mut self.shapes[shape.kind() as usize];
+        match shape {
+            Shape::Rectangle {
+                pos,
+                width,
+                height,
+                color,
+            } => {
+                let left = pos.x;
+                let right = pos.x + width;
+                let top = pos.y;
+                let bottom = pos.y + height;
+
+                let start_index = shape_data.vertices.len() as u32;
+
+                shape_data.vertices.extend_from_slice(&[
+                    PointVertex::from(([left, top], [0., 0.], color)),
+                    PointVertex::from(([left, bottom], [0., 1.], color)),
+                    PointVertex::from(([right, bottom], [1., 1.], color)),
+                    PointVertex::from(([right, top], [1., 0.], color)),
+                ]);
+
+                shape_data.indices.extend_from_slice(&[
+                    start_index,
+                    start_index + 1,
+                    start_index + 2,
+                    start_index,
+                    start_index + 2,
+                    start_index + 3,
+                ]);
+            }
+            Shape::Circle { pos, radius, color } => {
+                let left = pos.x - radius;
+                let right = pos.x + radius;
+                let top = pos.y - radius;
+                let bottom = pos.y + radius;
+
+                let start_index = shape_data.vertices.len() as u32;
+
+                shape_data.vertices.extend_from_slice(&[
+                    PointVertex::from(([left, top], [0., 0.], color)),
+                    PointVertex::from(([left, bottom], [0., 1.], color)),
+                    PointVertex::from(([right, bottom], [1., 1.], color)),
+                    PointVertex::from(([right, top], [1., 0.], color)),
+                ]);
+
+                shape_data.indices.extend_from_slice(&[
+                    start_index,
+                    start_index + 1,
+                    start_index + 2,
+                    start_index,
+                    start_index + 2,
+                    start_index + 3,
+                ]);
+            }
+            Shape::Triangle { pos1, pos2, pos3, color } => {
+                let start_index = shape_data.vertices.len() as u32;
+
+                shape_data.vertices.extend_from_slice(&[
+                    PointVertex::from((pos1.to_array(), [0., 0.], color)),
+                    PointVertex::from((pos2.to_array(), [0., 1.], color)),
+                    PointVertex::from((pos3.to_array(), [1., 1.], color)),
+                ]);
+
+                shape_data.indices.extend_from_slice(&[
+                    start_index,
+                    start_index + 1,
+                    start_index + 2,
+                ]);
+            }
+        }
+    }
+
+    pub fn clear_shape(&mut self, shape_type: ShapeType) {
+        let i = shape_type as usize;
+        self.shapes[i].vertices.clear();
+        self.shapes[i].indices.clear();
+    }
+
+    pub fn clear(&mut self) {
+        for shape in self.shapes.iter_mut() {
+            shape.vertices.clear();
+            shape.indices.clear();
+        }
+    }
+}
+
+impl Rendering for ShapeBatcher {
+    fn update_buffers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        for shape in self.shapes.iter_mut() {
+            shape.update_buffers(device, queue);
+        }
+    }
+
+    fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+        for shape in &self.shapes {
+            shape.render(render_pass);
+        }
     }
 }

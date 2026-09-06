@@ -32,10 +32,5 @@ fn vs_main(model: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let centered_uv = in.uv - vec2<f32>(0.5, 0.5);
-    let dist = length(centered_uv);
-    if dist > 0.5 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
     return in.color;
 }
