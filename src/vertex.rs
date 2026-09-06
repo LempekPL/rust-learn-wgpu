@@ -100,7 +100,7 @@ pub trait Rendering {
 
 pub struct ShapeBatcher {
     vertices: Vec<PointVertex>,
-    indices: Vec<u16>,
+    indices: Vec<u32>,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     index_buffer: wgpu::Buffer,
@@ -122,7 +122,7 @@ impl ShapeBatcher {
 
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Index Buffer"),
-            size: (Self::INITIAL_INDEX_CAPACITY * size_of::<u16>()) as wgpu::BufferAddress,
+            size: (Self::INITIAL_INDEX_CAPACITY * size_of::<u32>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -191,7 +191,7 @@ impl ShapeBatcher {
         let top = y;
         let bottom = y + height;
 
-        let start_index = self.vertices.len() as u16;
+        let start_index = self.vertices.len() as u32;
 
         self.vertices.extend_from_slice(&[
             PointVertex::from(([left, top], [0.,0.], color)),
@@ -238,7 +238,7 @@ impl Rendering for ShapeBatcher {
 
             self.index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Index Buffer"),
-                size: (self.index_capacity * size_of::<u16>()) as u64,
+                size: (self.index_capacity * size_of::<u32>()) as u64,
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -255,7 +255,7 @@ impl Rendering for ShapeBatcher {
 
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
     }
 }

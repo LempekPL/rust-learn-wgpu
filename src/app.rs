@@ -237,7 +237,7 @@ impl State {
     }
 
     fn update(&mut self) {
-        log::info!("FPS: {:?}", 1.0 / self.time.delta());
+        // log::info!("FPS: {:?}", 1.0 / self.time.delta());
         if self.keyboard.just_pressed(KeyCode::Escape) {
             self.should_close = true;
         }

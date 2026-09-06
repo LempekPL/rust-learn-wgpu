@@ -7,6 +7,7 @@ pub struct Keyboard {
     last_pressed: HashSet<KeyCode>,
 }
 
+#[allow(unused)]
 impl Keyboard {
     pub fn new() -> Self {
         Self {
@@ -60,6 +61,7 @@ pub struct Mouse {
     last_pressed: HashSet<MouseButton>,
 }
 
+#[allow(unused)]
 impl Mouse {
     pub fn new() -> Self {
         Self {
