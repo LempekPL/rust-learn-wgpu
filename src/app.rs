@@ -1,13 +1,40 @@
+use crate::input::{Keyboard, Mouse};
+use crate::vertex;
+use crate::vertex::ShapeBatcher;
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use winit::platform::web::EventLoopExtWebSys;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use winit::application::ApplicationHandler;
-use winit::event::{KeyEvent, WindowEvent};
+use winit::event::{MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::KeyCode;
+#[cfg(target_arch = "wasm32")]
+use winit::platform::web::EventLoopExtWebSys;
 use winit::window::{Window, WindowId};
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct GlobalsRaw {
+    screen_size: [f32; 2],
+    time: f32,
+    _padding: u32,
+}
+
+impl From<(winit::dpi::PhysicalSize<u32>, f32)> for GlobalsRaw {
+    fn from((size, time): (winit::dpi::PhysicalSize<u32>, f32)) -> Self {
+        Self {
+            screen_size: [size.width as f32, size.height as f32],
+            time,
+            _padding: 0,
+        }
+    }
+}
+
+struct Globals {
+    raw: GlobalsRaw,
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
 
 struct State {
     instance: wgpu::Instance,
@@ -16,8 +43,45 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     window: Option<Arc<Window>>,
+
+    should_close: bool,
     size: winit::dpi::PhysicalSize<u32>,
+    time: Time,
+    globals: Globals,
+    keyboard: Keyboard,
+    mouse: Mouse,
+
+    shapes: ShapeBatcher,
+}
+
+struct Time {
     last_render_time: web_time::Instant,
+    time_start: web_time::Instant,
+    delta: web_time::Duration,
+}
+
+impl Time {
+    fn new() -> Self {
+        Self {
+            time_start: web_time::Instant::now(),
+            last_render_time: web_time::Instant::now(),
+            delta: web_time::Duration::new(0, 0),
+        }
+    }
+
+    fn update(&mut self) {
+        let now = web_time::Instant::now();
+        self.delta = now - self.last_render_time;
+        self.last_render_time = now;
+    }
+
+    fn delta(&self) -> f64 {
+        self.delta.as_secs_f64()
+    }
+
+    fn since_start(&self) -> web_time::Duration {
+        self.time_start.elapsed()
+    }
 }
 
 impl State {
@@ -95,6 +159,48 @@ impl State {
 
         surface.configure(&device, &config);
 
+        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Quad Vertex Buffer"),
+            size: size_of::<GlobalsRaw>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let globals_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("globals_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals_bind_group"),
+            layout: &globals_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buffer.as_entire_binding(),
+            }],
+        });
+
+        let globals = Globals {
+            raw: GlobalsRaw::default(),
+            buffer: globals_buffer,
+            bind_group: globals_bind_group,
+        };
+
+        let mut quads =
+            ShapeBatcher::new(&device, config.format, &[Some(&globals_bind_group_layout)]);
+
+        quads.draw_rectangle(100., 100., 50., 50., wgpu::Color::WHITE.into());
+
         Ok(Self {
             instance,
             surface: Some(surface),
@@ -102,8 +208,15 @@ impl State {
             queue,
             config,
             window: Some(window),
+
+            should_close: false,
             size: winit::dpi::PhysicalSize::new(size.width.max(1), size.height.max(1)),
-            last_render_time: web_time::Instant::now(),
+            time: Time::new(),
+            globals,
+            keyboard: Keyboard::new(),
+            mouse: Mouse::new(),
+
+            shapes: quads,
         })
     }
 
@@ -113,17 +226,47 @@ impl State {
         }
     }
 
-    fn update(&mut self, dt: web_time::Duration) {
-        let _dt_sec = dt.as_secs();
+    fn pre_update(&mut self) {
+        self.time.update();
+        self.globals.raw = GlobalsRaw::from((self.size, self.time.since_start().as_secs_f32()));
+    }
+
+    fn post_update(&mut self) {
+        self.keyboard.update();
+        self.mouse.update();
+    }
+
+    fn update(&mut self) {
+        log::info!("FPS: {:?}", 1.0 / self.time.delta());
+        if self.keyboard.just_pressed(KeyCode::Escape) {
+            self.should_close = true;
+        }
+        if self.keyboard.just_pressed(KeyCode::Space) {
+            self.shapes.clear();
+        }
+        if self.mouse.is_pressed(MouseButton::Left) {
+            let (m_x, m_y) = self.mouse.position();
+            let size = 10.;
+            self.shapes.draw_rectangle(
+                m_x as f32 - size / 2.,
+                m_y as f32 - size / 2.,
+                size,
+                size,
+                wgpu::Color::GREEN.into(),
+            );
+        }
     }
 
     fn render(&mut self) -> anyhow::Result<()> {
-        let (surface, window) = match (&self.surface, &self.window) {
-            (Some(s), Some(w)) => (s, w),
-            _ => return Ok(()),
+        let Some(surface) = &self.surface else {
+            return Ok(());
         };
         // reduces flickering on web
-        let max_size = if cfg!(target_arch = "wasm32") { 2048 } else { u32::MAX };
+        let max_size = if cfg!(target_arch = "wasm32") {
+            2048
+        } else {
+            u32::MAX
+        };
         let target_width = self.size.width.min(max_size);
         let target_height = self.size.height.min(max_size);
         if self.config.width != target_width || self.config.height != target_height {
@@ -153,8 +296,16 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        self.queue.write_buffer(
+            &self.globals.buffer,
+            0,
+            bytemuck::bytes_of(&self.globals.raw),
+        );
+        use vertex::Rendering;
+        self.shapes.update_buffers(&self.device, &self.queue);
+
         {
-            let mut _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -175,11 +326,13 @@ impl State {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
+            render_pass.set_bind_group(0, &self.globals.bind_group, &[]);
+
+            self.shapes.render(&mut render_pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(output);
-        window.request_redraw();
         Ok(())
     }
 }
@@ -206,7 +359,9 @@ impl App {
     ) -> anyhow::Result<()> {
         #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
         {
-            env_logger::init();
+            env_logger::Builder::from_default_env()
+                .filter_level(log::LevelFilter::Info)
+                .init();
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -304,8 +459,8 @@ impl ApplicationHandler<State> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
         #[cfg(target_arch = "wasm32")]
         {
-            event.window.request_redraw();
-            event.resize(event.window.inner_size());
+            event.window.as_ref().unwrap().request_redraw();
+            event.resize(event.window.as_ref().unwrap().inner_size());
         }
         self.state = Some(event);
     }
@@ -325,10 +480,14 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
             WindowEvent::RedrawRequested => {
-                let now = web_time::Instant::now();
-                let dt = now - state.last_render_time;
-                state.last_render_time = now;
-                state.update(dt);
+                state.pre_update();
+                state.update();
+                state.post_update();
+
+                if state.should_close {
+                    event_loop.exit();
+                    return;
+                }
 
                 match state.render() {
                     Ok(_) => {}
@@ -337,19 +496,25 @@ impl ApplicationHandler<State> for App {
                         event_loop.exit();
                     }
                 }
+                if let Some(window) = state.window.as_ref() {
+                    window.request_redraw();
+                }
             }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        physical_key: PhysicalKey::Code(code),
-                        state: key_state,
-                        ..
-                    },
+            WindowEvent::MouseInput {
+                state: mouse_state,
+                button,
                 ..
             } => {
-                if code == KeyCode::Escape && key_state.is_pressed() {
-                    event_loop.exit();
-                }
+                state.mouse.handle_mouse_input(mouse_state, button);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                state.mouse.handle_cursor_moved(position);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                state.mouse.handle_mouse_wheel(delta);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                state.keyboard.handle_event(&event);
             }
             _ => {}
         }

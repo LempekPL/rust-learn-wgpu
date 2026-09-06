@@ -1,4 +1,6 @@
 pub mod app;
+mod vertex;
+mod input;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
