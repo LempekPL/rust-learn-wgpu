@@ -52,7 +52,7 @@ impl From<wgpu::Color> for Color {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct PointVertex {
+pub struct PointVertex {
     position: glam::Vec2,
     uv: glam::Vec2,
     color: Color,
@@ -149,9 +149,9 @@ pub trait Rendering {
     fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>);
 }
 
-struct ShapeData {
-    vertices: Vec<PointVertex>,
-    indices: Vec<u32>,
+pub struct ShapeData {
+    pub vertices: Vec<PointVertex>,
+    pub indices: Vec<u32>,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     index_buffer: wgpu::Buffer,

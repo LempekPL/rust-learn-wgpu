@@ -1,6 +1,6 @@
 use crate::input::{Keyboard, Mouse};
 use crate::vertex;
-use crate::vertex::{Shape, ShapeBatcher, ShapeType};
+use crate::vertex::{Shape, ShapeBatcher, ShapeData, ShapeType};
 use std::sync::{Arc, LazyLock};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -52,6 +52,7 @@ struct State {
     mouse: Mouse,
 
     shapes: ShapeBatcher,
+    box_buffer: ShapeData,
 }
 
 struct Time {
@@ -137,7 +138,7 @@ impl State {
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
@@ -202,6 +203,13 @@ impl State {
         let mut shapes =
             ShapeBatcher::new(&device, config.format, &[Some(&globals_bind_group_layout)]);
 
+        let box_buffer = ShapeData::new(
+            &device,
+            config.format,
+            &[Some(&globals_bind_group_layout)],
+            wgpu::include_wgsl!("shaders/test.wgsl"),
+        );
+
         let mut state = Self {
             instance,
             surface: Some(surface),
@@ -218,6 +226,7 @@ impl State {
             mouse: Mouse::new(),
 
             shapes,
+            box_buffer,
         };
         state.init();
         Ok(state)
@@ -241,11 +250,27 @@ impl State {
 
     fn init(&mut self) {
         self.shapes.draw(Shape::Rectangle {
-            pos: glam::Vec2::splat(100.),
+            pos: glam::Vec2::splat(10.),
             width: 50.,
             height: 50.,
             color: wgpu::Color::WHITE.into(),
         });
+
+        let color = vertex::Color::from(wgpu::Color::WHITE);
+        self.box_buffer.vertices.extend_from_slice(&[
+            vertex::PointVertex::from(([0., 0.], [0.0, 0.], color)),
+            vertex::PointVertex::from(([0., self.size.height as f32], [0., 1.], color)),
+            vertex::PointVertex::from((
+                [self.size.width as f32, self.size.height as f32],
+                [1., 1.],
+                color,
+            )),
+            vertex::PointVertex::from(([self.size.width as f32, 0.], [1., 0.], color)),
+        ]);
+
+        self.box_buffer
+            .indices
+            .extend_from_slice(&[0, 1, 2, 0, 2, 3]);
     }
 
     fn update(&mut self) {
@@ -333,6 +358,7 @@ impl State {
         );
         use vertex::Rendering;
         self.shapes.update_buffers(&self.device, &self.queue);
+        self.box_buffer.update_buffers(&self.device, &self.queue);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -359,6 +385,7 @@ impl State {
             render_pass.set_bind_group(0, &self.globals.bind_group, &[]);
 
             self.shapes.render(&mut render_pass);
+            self.box_buffer.render(&mut render_pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
